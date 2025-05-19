@@ -52,3 +52,6 @@ ALTER TABLE webhook_logs
 
 ALTER TABLE webhook_logs
 DROP COLUMN event_type;
+
+ALTER TABLE webhook_logs
+ADD COLUMN patient_AbhaAddress VARCHAR(100) NULL;

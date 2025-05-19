@@ -1,11 +1,11 @@
-const axios = require("axios");
-const { v4: uuidv4 } = require("uuid");
-const ABDM_CONFIG = require('../config/abdm')
+import axios  from "axios";
+import { v4 as uuidv4 } from "uuid";
+import ABDM_CONFIG  from '../config/abdm.js';
 
 let cachedToken = null;
 let tokenExpiresAt = null; 
 
-exports.getAbdmToken = async () => {
+export async function getAbdmToken() {
   const now = Date.now();
 
   // Reuse token if still valid
@@ -46,4 +46,4 @@ exports.getAbdmToken = async () => {
     console.error("Token generation failed:", error.response?.data || error.message);
     throw new Error("Failed to fetch access token from ABDM");
   }
-};
+}

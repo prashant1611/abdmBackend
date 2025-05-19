@@ -1,20 +1,19 @@
-const { getAbdmToken } = require("../services/abdmAuthService");
-const axios = require("axios");
-const { v4: uuidv4 } = require("uuid");
-const { ABDM_CONFIG } = require("../config/abdm");
-const pool = require("../config/db")
+import { getAbdmToken } from "../services/abdmAuthService.js";
+import axios from "axios";
+import { v4 as uuidv4 } from "uuid";
+import ABDM_CONFIG  from "../config/abdm.js";
+import  query  from "../config/db.js";
 
-exports.generateToken = async (req, res) => {
+export async function generateToken(req, res) {
   const { abhaNumber, abhaAddress, name, gender, yearOfBirth } = req.body;
 
   if (!abhaNumber || !abhaAddress || !name || !gender || !yearOfBirth) {
     return res.status(400).json({ error: "all fields are mandatory" });
   }
-
   try {
 
     // 1. Check DB for existing token
-    const [rows] = await pool.query(
+    const [rows] = await query(
       `SELECT link_token, valid_until FROM link_tokens
        WHERE abha_address = ? AND valid_until > NOW()
        ORDER BY received_at DESC LIMIT 1`,
@@ -58,4 +57,4 @@ exports.generateToken = async (req, res) => {
     console.error("generate-token error:", err.message);
     res.status(500).json({ error: err.response?.data || err.message });
   }
-};
+}
