@@ -8,6 +8,7 @@ import { handleWebhook } from "./controllers/webhookController.js";
 import { rateLimitWebhook } from './middleware/rateLimit.js';
 import generateTokenRoutes from './routes/generateTokenRoutes.js';
 import careContextRoutes from './routes/careContextRoutes.js'
+import notifyRoutes from './routes/notifyRoutes.js'
 
 const app = express();
 app.use(json());
@@ -18,6 +19,7 @@ app.set('trust proxy',1);
 app.use("/abdm/webhook",rateLimitWebhook, handleWebhook);
 app.use('/abdm', generateTokenRoutes);
 app.use('/abdm', careContextRoutes);
+app.use('/abdm', notifyRoutes);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));

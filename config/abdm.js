@@ -8,6 +8,9 @@ const ABDM_CONFIG = {
   authUrl: '/api/hiecm/gateway/v3/sessions',
   tokenGeneration:'/api/hiecm/v3/token/generate-token',
   carecontext:'/api/hiecm/hip/v3/link/carecontext',
+  smsNotify:'/api/hiecm/hip/v3/link/patient/links/sms/notify2',
+  onDiscovery:'/api/hiecm/user-initiated-linking/v3/patient/care-context/on-discover',
+  onInit:'/api/hiecm/user-initiated-linking/v3/link/care-context/on-init',
 };
 
 
