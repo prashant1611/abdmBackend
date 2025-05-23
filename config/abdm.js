@@ -11,6 +11,9 @@ const ABDM_CONFIG = {
   smsNotify:'/api/hiecm/hip/v3/link/patient/links/sms/notify2',
   onDiscovery:'/api/hiecm/user-initiated-linking/v3/patient/care-context/on-discover',
   onInit:'/api/hiecm/user-initiated-linking/v3/link/care-context/on-init',
+  onConfirm:'/api/hiecm/user-initiated-linking/v3/link/care-context/on-confirm',
+  hipNotify:'/api/hiecm/consent/v3/request/hip/on-notify',
+  onRequest:'/api/hiecm/data-flow/v3/health-information/hip/on-request',
 };
 
 

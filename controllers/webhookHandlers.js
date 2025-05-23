@@ -64,6 +64,8 @@ export async function handleDiscover(body) {
   const { transactionId, patient, requestId } = body;
   const abhaAddress = patient.id;
   const mr = patient.unverifiedIdentifiers?.find((i) => i.type === "MR")?.value;
+  let payload;
+  let responsePatient;
 
   if (!mr && !abhaAddress) {
     console.warn("Missing patient identifiers");
@@ -78,7 +80,7 @@ export async function handleDiscover(body) {
   );
 
   if (rows.length === 0) {
-    const payload = {
+    payload = {
       transactionId,
       error: {
         code: "ABDM-1010",
@@ -89,7 +91,7 @@ export async function handleDiscover(body) {
       },
     };
   } else {
-    const responsePatient = rows.reduce((acc, doc) => {
+    responsePatient = rows.reduce((acc, doc) => {
       let block = acc.find((p) => p.referenceNumber === doc.patient_id);
       if (!block) {
         block = {
@@ -111,7 +113,7 @@ export async function handleDiscover(body) {
       return acc;
     }, []);
 
-    const payload = {
+    payload = {
       transactionId,
       patient: responsePatient,
       matchedBy: ["MR"],
@@ -161,6 +163,226 @@ export async function handleDiscover(body) {
   }
 }
 
+// to hadle on init webhook call
 export async function handleInit(body) {
-  
+  try {
+    const { transactionId, patient, error, requestId } = body;
+
+    //handle error if i get error message
+    if (error?.code === "ABDM-1056") {
+      console.warn("Care context already linked:", error.message);
+      return;
+    }
+
+    //Extract careContext reference and requestId
+    const careContextRef = patient?.careContexts?.[0]?.referenceNumber;
+
+    if (!transactionId || !careContextRef) {
+      console.error("Missing transactionId or careContext reference.");
+      return;
+    }
+
+    //Find the original request (to ensure it's valid)
+    const [rows] = await pool.query(
+      `SELECT request_id FROM linking_requests WHERE carecontext_reference = ?`,
+      [careContextRef]
+    );
+
+    if (rows.length === 0) {
+      console.warn("No matching care context found in linking_requests.");
+      return;
+    }
+
+    const linkReferenceNumber = uuidv4();
+    const communicationExpiry = new Date(
+      Date.now() + 5 * 60 * 1000
+    ).toISOString(); // 5 min expiry
+
+    const payload = {
+      transactionId,
+      link: {
+        referenceNumber: linkReferenceNumber,
+        authenticationType: "MEDIATE",
+        meta: {
+          communicationMedium: "MOBILE",
+          communicationHint: "OTP",
+          communicationExpiry: communicationExpiry,
+        },
+      },
+      response: {
+        requestId: requestId,
+      },
+    };
+
+    console.log("payload ", payload);
+
+    const { accessToken } = await getAbdmToken();
+
+    const response = await axios.post(
+      `${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.onInit}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-CM-ID": process.env.XCMID,
+          "REQUEST-ID": uuidv4(),
+          TIMESTAMP: new Date().toISOString(),
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    //response
+    // console.log("response of init api calling "+JSON.stringify(response));
+    // console.log("response of init api calling "+response.body);
+    //Optionally update linking_requests table
+    await pool.query(
+      `UPDATE linking_requests
+       SET status = ?, linked_at = NOW() , request_id = ?, reference_number = ?
+       WHERE carecontext_reference = ?`,
+      ["on-init-sent", requestId, linkReferenceNumber, careContextRef]
+    );
+
+    console.log("on-init sent for linking. Ref:", linkReferenceNumber);
+  } catch (err) {
+    console.error("Error in handleLinkInit:", err.message);
+  }
+}
+
+export async function handleConfirm(body) {
+  try {
+    const { confirmation, requestId } = body;
+    const linkRefNumber = confirmation?.linkRefNumber;
+
+    if (!linkRefNumber) {
+      console.error("Missing linkRefNumber in confirm webhook.");
+      return;
+    }
+
+    //Fetch patient and careContext data using linkRefNumber
+    const [rows] = await pool.query(
+      `SELECT * FROM linking_requests 
+       WHERE reference_number = ? AND status = 'on-init-sent'`,
+      [linkRefNumber]
+    );
+
+    // if (rows.length === 0) {
+    //   console.warn("No pending linking request found for this linkRefNumber.");
+    //   return;
+    // }
+    // console.log("record ",rows[0]);
+    const record = rows[0];
+    // const requestId = record.request_id;
+    // You might want to join with `documents` if you want display name
+    const [docRows] = await pool.query(
+      `SELECT * FROM documents 
+       WHERE reference_number = ? LIMIT 1`,
+      [record.carecontext_reference]
+    );
+
+    const doc = docRows[0] || {};
+
+    //Prepare payload for on-confirm
+    const payload = {
+      patient: [
+        {
+          referenceNumber: linkRefNumber,
+          display: doc.display_name || `Visit for ${record.patient_id}`,
+          hiType: record.hi_type,
+          count: 1,
+          careContexts: [
+            {
+              referenceNumber: record.carecontext_reference,
+              display: doc.display_name || record.carecontext_reference,
+            },
+          ],
+        },
+      ],
+      response: {
+        requestId,
+      },
+    };
+
+    const { accessToken } = await getAbdmToken();
+
+    await axios.post(
+      `${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.onConfirm}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-CM-ID": process.env.XCMID,
+          "REQUEST-ID": uuidv4(),
+          TIMESTAMP: new Date().toISOString(),
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    //Update DB status
+    await pool.query(
+      `UPDATE linking_requests SET status = ?, linked_at = NOW()
+       WHERE id = ?`,
+      ["linked", record.id]
+    );
+
+    console.log(
+      "on-confirm sent successfully for linkRefNumber:",
+      linkRefNumber
+    );
+  } catch (err) {
+    console.error("Error in handleConfirmLink:", err.message);
+  }
+}
+
+export async function handleNotify(body) {
+  const { requestId, notification } = body;
+  const consentId = notification?.consentId;
+  const payload = {
+    acknowledgement: {
+      status: "ok",
+      consentId: consentId,
+    },
+    response: {
+      requestId: requestId,
+    },
+  };
+  const { accessToken } = await getAbdmToken();
+  await axios.post(`${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.hipNotify}`, payload, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-CM-ID": process.env.XCMID,
+      "REQUEST-ID": uuidv4(),
+      TIMESTAMP: new Date().toISOString(),
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+export async function handleRequest(body) {
+  const { requestId, transactionId, dataPushUrl } = body;
+
+  const requestPayload = {
+    hiRequest: {
+      transactionId: transactionId,
+      sessionStatus: "ACKNOWLEDGED",
+    },
+    response: {
+      requestId: requestId,
+    },
+  };
+  const { accessToken } = await getAbdmToken();
+  const response = await axios.post(`${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.hiRequest}`, requestPayload, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-CM-ID": process.env.XCMID,
+      "REQUEST-ID": uuidv4(),
+      TIMESTAMP: new Date().toISOString(),
+      "Content-Type": "application/json",
+    },
+  });
+
+  if ([200, 201, 202].includes(response.status)) {
+
+  }
 }
