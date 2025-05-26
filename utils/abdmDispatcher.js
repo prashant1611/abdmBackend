@@ -4,6 +4,8 @@ import {
   handleDiscover,
   handleInit,
   handleConfirm,
+  handleNotify,
+  handleRequest
 } from "../controllers/webhookHandlers.js";
 export async function dispatchByPath(path, body) {
   if (path.includes("on-generate-token")) {

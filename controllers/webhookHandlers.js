@@ -3,6 +3,8 @@ import { getAbdmToken } from "../services/abdmAuthService.js";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
 import ABDM_CONFIG from "../config/abdm.js";
+import encryptionUtils from "../encryptionDencyption/index.js";
+const { encryptData, getEcdhKeyMaterial } = encryptionUtils;
 
 //call on handleGenertetoken webhook
 export async function handleGenerateToken(body) {
@@ -338,6 +340,13 @@ export async function handleConfirm(body) {
 export async function handleNotify(body) {
   const { requestId, notification } = body;
   const consentId = notification?.consentId;
+  const status = notification?.status;
+  const patientAddress = notification?.consentDetail?.patient?.id;
+  const purpose = notification?.consentDetail?.purpose?.text;
+  console.log("purpose ", purpose);
+  console.log("consentId ", consentId);
+  console.log("status ", status);
+
   const payload = {
     acknowledgement: {
       status: "ok",
@@ -348,20 +357,58 @@ export async function handleNotify(body) {
     },
   };
   const { accessToken } = await getAbdmToken();
-  await axios.post(`${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.hipNotify}`, payload, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "X-CM-ID": process.env.XCMID,
-      "REQUEST-ID": uuidv4(),
-      TIMESTAMP: new Date().toISOString(),
-      "Content-Type": "application/json",
-    },
-  });
+  const response = await axios.post(
+    `${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.hipNotify}`,
+    payload,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "X-CM-ID": process.env.XCMID,
+        "REQUEST-ID": uuidv4(),
+        TIMESTAMP: new Date().toISOString(),
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  if ([200, 201, 202].includes(response.status)) {
+    try {
+      const [consent] = await pool.query(
+        `SELECT * FROM consents 
+       WHERE abha_address = ? LIMIT 1`,
+        [patientAddress]
+      );
+      console.log("consent table ", consent);
+      console.log("consent length", consent.length);
+      //if conset for a patinet is not present then we insert a row
+      if (consent.length === 0) {
+        console.log("inside insert query ");
+        await pool.query(
+          `INSERT INTO consents 
+            (consent_id, purpose, status, abha_address)
+           VALUES (?, ?, ?, ?)`,
+          [consentId, purpose, status, patientAddress]
+        );
+      }
+      // console.log("consent length", consent.length);
+      if (consent.length != 0) {
+        console.log("inside update query ");
+        await pool.query(
+          `update consents set consent_id = ?, purpose = ?, status = ? where abha_address = ?`,
+          [consentId, purpose, status, patientAddress]
+        );
+      }
+    } catch (error) {
+      console.error("unable to update consents table ", error);
+    }
+  }
 }
 
 export async function handleRequest(body) {
-  const { requestId, transactionId, dataPushUrl } = body;
-
+  const { requestId, transactionId, hiRequest } = body;
+  const consentId = hiRequest?.consent?.id;
+  const keyMaterial = hiRequest?.keyMaterial;
+  const dataPushUrl = hiRequest?.dataPushUrl;
   const requestPayload = {
     hiRequest: {
       transactionId: transactionId,
@@ -372,17 +419,239 @@ export async function handleRequest(body) {
     },
   };
   const { accessToken } = await getAbdmToken();
-  const response = await axios.post(`${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.hiRequest}`, requestPayload, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "X-CM-ID": process.env.XCMID,
-      "REQUEST-ID": uuidv4(),
-      TIMESTAMP: new Date().toISOString(),
-      "Content-Type": "application/json",
-    },
-  });
+  const response = await axios.post(
+    `${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.onRequest}`,
+    requestPayload,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "X-CM-ID": process.env.XCMID,
+        "REQUEST-ID": uuidv4(),
+        TIMESTAMP: new Date().toISOString(),
+        "Content-Type": "application/json",
+      },
+    }
+  );
 
   if ([200, 201, 202].includes(response.status)) {
+    try {
+      let carecontext_reference;
+      const [consent] = await pool.query(
+        `SELECT abha_address FROM consents 
+       WHERE consent_id = ? LIMIT 1`,
+        [consentId]
+      );
+      if (consent.length != 0) {
+        const abhaAddress = consent[0].abha_address;
+        [carecontext_reference] = await pool.query(
+          `SELECT carecontext_reference FROM documents 
+       WHERE abha_address = ? and carecontextSend = 1 and abdmdataSend = 0 LIMIT 1`,
+          [abhaAddress]
+        );
+      }
+      const carecontextVisit =
+        carecontext_reference?.[0]?.carecontext_reference;
+      const fhirMsg = {
+        resourceType: "Bundle",
+        type: "document",
+        entry: [
+          {
+            resource: {
+              resourceType: "Composition",
+              id: "composition-1",
+              status: "final",
+              type: {
+                coding: [
+                  {
+                    system: "http://loinc.org",
+                    code: "57833-6",
+                    display: "Prescription",
+                  },
+                ],
+              },
+              subject: {
+                reference: "Patient/patient-1",
+              },
+              author: [
+                {
+                  reference: "Practitioner/practitioner-1",
+                },
+              ],
+              title: "Prescription Record",
+            },
+          },
+          {
+            resource: {
+              resourceType: "Patient",
+              id: "patient-1",
+              identifier: [
+                {
+                  system: "https://ndhm.in/healthid",
+                  value: "prashantkumar2000@sbx",
+                },
+                {
+                  system: "https://Parashospitalsgurugram.org/uhid",
+                  value: "phuid-9089",
+                },
+              ],
+              name: [
+                {
+                  text: "Prashant Kumar",
+                },
+              ],
+              gender: "male",
+              birthDate: "1990-01-01",
+            },
+          },
+          {
+            resource: {
+              resourceType: "Practitioner",
+              id: "practitioner-1",
+              name: [
+                {
+                  text: "Dr. John Doe",
+                },
+              ],
+            },
+          },
+          {
+            resource: {
+              resourceType: "Encounter",
+              id: "encounter-1",
+              identifier: [
+                {
+                  system: "https://Parashospitalsgurugram.org/carecontext",
+                  value: carecontextVisit,
+                },
+              ],
+              status: "finished",
+              class: {
+                system: "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+                code: "AMB",
+                display: "ambulatory",
+              },
+              subject: {
+                reference: "Patient/patient-1",
+              },
+              period: {
+                start: "2025-05-24T10:00:00Z",
+                end: "2025-05-24T10:30:00Z",
+              },
+            },
+          },
+          {
+            resource: {
+              resourceType: "MedicationRequest",
+              id: "medicationrequest-1",
+              status: "active",
+              intent: "order",
+              medicationCodeableConcept: {
+                coding: [
+                  {
+                    system: "http://www.nlm.nih.gov/research/umls/rxnorm",
+                    code: "313782",
+                    display: "Amoxicillin 500mg Capsule",
+                  },
+                ],
+              },
+              subject: {
+                reference: "Patient/patient-1",
+              },
+              encounter: {
+                reference: "Encounter/encounter-1",
+              },
+              authoredOn: "2025-05-24T10:00:00Z",
+              requester: {
+                reference: "Practitioner/practitioner-1",
+              },
+            },
+          },
+        ],
+      };
+      const senderKeyMaterial = getEcdhKeyMaterial();
+      console.log(senderKeyMaterial);
+      const encryptionResult = encryptData({
+        stringToEncrypt: JSON.stringify(fhirMsg),
+        senderNonce: senderKeyMaterial.nonce,
+        requesterNonce: keyMaterial.nonce,
+        senderPrivateKey: senderKeyMaterial.privateKey,
+        requesterPublicKey: keyMaterial.dhPublicKey.keyValue,
+      });
+      // console.log("encrypted data ", encryptionResult);
+      const payload = {
+        pageNumber: 0, // Current page number.
+        pageCount: 1, //Total number of pages.
+        transactionId: transactionId,
+        entries: [
+          {
+            content: encryptionResult.encryptedData,
+            media: "application/fhir+json",
+            checksum: "string",
+            careContextReference: carecontextVisit,
+          },
+        ],
+        keyMaterial: {
+          cryptoAlg: keyMaterial.cryptoAlg,
+          curve: keyMaterial.curve,
+          dhPublicKey: {
+            expiry: keyMaterial.dhPublicKey.expiry,
+            parameters: keyMaterial.dhPublicKey.parameters,
+            keyValue: senderKeyMaterial.x509PublicKey,
+          },
+          nonce: senderKeyMaterial.nonce,
+        },
+      };
 
+      console.log("data push body ", payload);
+      const { accessToken } = await getAbdmToken();
+      const response = await axios.post(dataPushUrl, payload, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if ([200, 201, 202].includes(response.status)) {
+        const payload = {
+          notification: {
+            consentId: consentId,
+            transactionId: transactionId,
+            doneAt: new Date().toISOString(),
+            notifier: {
+              type: "HIP",
+              id: process.env.XHIPID,
+            },
+            statusNotification: {
+              sessionStatus: "TRANSFERRED",
+              hipId: process.env.XHIPID,
+              statusResponses: [
+                {
+                  careContextReference: carecontextVisit,
+                  hiStatus: "OK",
+                  description: "test care context",
+                },
+              ],
+            },
+          },
+        };
+        console.log("hipNotify ", payload);
+        const { accessToken } = await getAbdmToken();
+        const response = await axios.post(
+          `${ABDM_CONFIG.baseUrl}${ABDM_CONFIG.dataflowNotify}`,
+          payload,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "X-CM-ID": process.env.XCMID,
+              "REQUEST-ID": uuidv4(),
+              TIMESTAMP: new Date().toISOString(),
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      }
+    } catch (error) {
+      console.log("unable get reference data in sending data ", error);
+    }
   }
 }

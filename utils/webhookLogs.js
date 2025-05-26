@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 
 const __dirname = path.resolve();
-// const logFilePath = path.join(__dirname, 'logs', 'webhook-log.txt');
 
 const logDir = path.join(__dirname, 'logs');
 const logFilePath = path.join(logDir, 'webhook-log.txt');

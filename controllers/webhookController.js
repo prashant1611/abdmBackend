@@ -6,7 +6,8 @@ export const handleWebhook = async (req, res) => {
   const fullPath = req.originalUrl; // E.g., /abdm/webhook/api/v3/hip/token/on-generate-token
   const subPath = fullPath.replace("/abdm/webhook", ""); // Get just the ABDM path
   logWebhook(subPath,req.body)
-
+  
+  console.log("fullPath ", fullPath);
   console.log(`Webhook received at ${subPath}`);
   console.log("Body:", JSON.stringify(req.body, null, 2));
 
